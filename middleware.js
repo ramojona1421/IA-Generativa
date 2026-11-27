@@ -21,7 +21,44 @@ function addSecurityHeaders(response) {
     return response;
 }
 
+// Site-wide password (HTTP Basic Auth). Credentials come from the
+// SITE_USER / SITE_PASSWORD environment variables set in Hostinger.
+// Fails closed: if they are not set, nobody gets in.
+function safeEqual(a, b) {
+    if (a.length !== b.length) return false;
+    let diff = 0;
+    for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+    return diff === 0;
+}
+
+function checkSiteAuth(request) {
+    const user = process.env.SITE_USER;
+    const pass = process.env.SITE_PASSWORD;
+    if (!user || !pass) {
+        return new NextResponse('Site locked: SITE_USER / SITE_PASSWORD not configured.', { status: 503 });
+    }
+    const header = request.headers.get('authorization') || '';
+    if (header.startsWith('Basic ')) {
+        try {
+            const decoded = atob(header.slice(6));
+            const i = decoded.indexOf(':');
+            if (i !== -1 && safeEqual(decoded.slice(0, i), user) && safeEqual(decoded.slice(i + 1), pass)) {
+                return null;
+            }
+        } catch {
+            // malformed header: fall through to 401
+        }
+    }
+    return new NextResponse('Authentication required.', {
+        status: 401,
+        headers: { 'WWW-Authenticate': 'Basic realm="Open Generative AI", charset="UTF-8"' },
+    });
+}
+
 export function middleware(request) {
+    const denied = checkSiteAuth(request);
+    if (denied) return addSecurityHeaders(denied);
+
     const url = request.nextUrl;
 
     // Catch requests to /api/workflow, /api/app, and /api/v1
